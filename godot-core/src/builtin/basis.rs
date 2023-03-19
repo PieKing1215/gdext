@@ -570,6 +570,14 @@ impl Mul<Vector3> for Basis {
     }
 }
 
+impl Mul<&Vector3> for Basis {
+    type Output = Vector3;
+
+    fn mul(self, rhs: &Vector3) -> Self::Output {
+        self.glam2(rhs, |a, b| a * b)
+    }
+}
+
 impl GodotFfi for Basis {
     ffi_methods! { type sys::GDExtensionTypePtr = *mut Self; .. }
 }
