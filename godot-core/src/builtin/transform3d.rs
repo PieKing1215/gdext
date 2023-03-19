@@ -284,6 +284,14 @@ impl Mul<Vector3> for Transform3D {
     }
 }
 
+impl Mul<&Vector3> for Transform3D {
+    type Output = Vector3;
+
+    fn mul(self, rhs: &Vector3) -> Self::Output {
+        self.glam2(rhs, |t, v| t.transform_point3(v))
+    }
+}
+
 impl Mul<real> for Transform3D {
     type Output = Self;
 
