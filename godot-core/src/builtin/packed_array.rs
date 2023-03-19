@@ -133,6 +133,17 @@ macro_rules! impl_packed_array {
                 // SAFETY: `ptr` just verified that the index is not out of bounds.
                 unsafe { (*ptr).clone() }
             }
+            
+            /// Returns a reference to the value at the specified index.
+            ///
+            /// # Panics
+            ///
+            /// If `index` is out of bounds.
+            pub fn get_ref(&self, index: usize) -> &$Element {
+                let ptr = self.ptr(index);
+                // SAFETY: `ptr` just verified that the index is not out of bounds.
+                unsafe { &*ptr }
+            }
 
             /// Finds the index of an existing value in a sorted array using binary search.
             /// Equivalent of `bsearch` in GDScript.
