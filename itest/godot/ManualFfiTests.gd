@@ -18,6 +18,13 @@ func test_missing_init():
 
 	print("[GD] WithoutInit is: ", instance)
 
+func test_init_defaults():
+	var obj = WithInitDefaults.new()
+
+	assert_eq(obj.default_int, 0)
+	assert_eq(obj.literal_int, 42)
+	assert_eq(obj.expr_int, -42)
+
 func test_to_string():
 	var ffi = VirtualMethodTest.new()
 	
@@ -26,8 +33,26 @@ func test_to_string():
 func test_export():
 	var obj = HasProperty.new()
 
-	obj.int_val = 5
-	assert_eq(obj.int_val, 5)
+	assert_eq(obj.int_val, 0)
+	obj.int_val = 1
+	assert_eq(obj.int_val, 1)
+
+	assert_eq(obj.int_val_read, 2)
+
+	obj.int_val_write = 3
+	assert_eq(obj.retrieve_int_val_write(), 3)
+
+	assert_eq(obj.int_val_rw, 0)
+	obj.int_val_rw = 4
+	assert_eq(obj.int_val_rw, 4)
+
+	assert_eq(obj.int_val_getter, 0)
+	obj.int_val_getter = 5
+	assert_eq(obj.int_val_getter, 5)
+
+	assert_eq(obj.int_val_setter, 0)
+	obj.int_val_setter = 5
+	assert_eq(obj.int_val_setter, 5)
 
 	obj.string_val = "test val"
 	assert_eq(obj.string_val, "test val")
@@ -37,10 +62,10 @@ func test_export():
 	assert_eq(obj.object_val, node)
 	
 	var texture_val_meta = obj.get_property_list().filter(
-		func(el): return el["name"] == "texture_val"
+		func(el): return el["name"] == "texture_val_rw"
 	).front()
 	
-	assert_that(texture_val_meta != null, "'texture_val' is defined")
+	assert_that(texture_val_meta != null, "'texture_val_rw' is defined")
 	assert_eq(texture_val_meta["hint"], PropertyHint.PROPERTY_HINT_RESOURCE_TYPE)
 	assert_eq(texture_val_meta["hint_string"], "Texture")
 	

@@ -35,6 +35,7 @@
 // Re-export macros.
 pub use crate::{array, dict, varray};
 
+pub use aabb::*;
 pub use array_inner::{Array, VariantArray};
 pub use basis::*;
 pub use color::*;
@@ -43,8 +44,11 @@ pub use math::*;
 pub use node_path::*;
 pub use others::*;
 pub use packed_array::*;
+pub use plane::*;
 pub use projection::*;
 pub use quaternion::*;
+pub use rect2::*;
+pub use rect2i::*;
 pub use rid::*;
 pub use string::*;
 pub use string_name::*;
@@ -84,6 +88,7 @@ mod array_inner;
 #[path = "dictionary.rs"]
 mod dictionary_inner;
 
+mod aabb;
 mod basis;
 mod color;
 mod glam_helpers;
@@ -91,8 +96,11 @@ mod math;
 mod node_path;
 mod others;
 mod packed_array;
+mod plane;
 mod projection;
 mod quaternion;
+mod rect2;
+mod rect2i;
 mod rid;
 mod string;
 mod string_chars;
@@ -317,4 +325,82 @@ macro_rules! real {
         let f: $crate::builtin::real = $f;
         f
     }};
+}
+
+/// The side of a [`Rect2`] or [`Rect2i`].
+///
+/// _Godot equivalent: `@GlobalScope.Side`_
+#[repr(C)]
+pub enum RectSide {
+    Left = 0,
+    Top = 1,
+    Right = 2,
+    Bottom = 3,
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------------------------
+
+/// Implementations of the `Export` trait for types where it can be done trivially.
+mod export {
+    use crate::builtin::*;
+    use crate::obj::Export;
+
+    macro_rules! impl_export_by_clone {
+        ($ty:path) => {
+            impl Export for $ty {
+                fn export(&self) -> Self {
+                    // If `Self` does not implement `Clone`, this gives a clearer error message
+                    // than simply `self.clone()`.
+                    Clone::clone(self)
+                }
+            }
+        };
+    }
+
+    impl_export_by_clone!(bool);
+    impl_export_by_clone!(isize);
+    impl_export_by_clone!(usize);
+    impl_export_by_clone!(i8);
+    impl_export_by_clone!(i16);
+    impl_export_by_clone!(i32);
+    impl_export_by_clone!(i64);
+    impl_export_by_clone!(u8);
+    impl_export_by_clone!(u16);
+    impl_export_by_clone!(u32);
+    impl_export_by_clone!(u64);
+    impl_export_by_clone!(f32);
+    impl_export_by_clone!(f64);
+
+    impl_export_by_clone!(Aabb);
+    impl_export_by_clone!(Basis);
+    impl_export_by_clone!(Color);
+    impl_export_by_clone!(GodotString);
+    impl_export_by_clone!(NodePath);
+    impl_export_by_clone!(PackedByteArray);
+    impl_export_by_clone!(PackedColorArray);
+    impl_export_by_clone!(PackedFloat32Array);
+    impl_export_by_clone!(PackedFloat64Array);
+    impl_export_by_clone!(PackedInt32Array);
+    impl_export_by_clone!(PackedInt64Array);
+    impl_export_by_clone!(PackedStringArray);
+    impl_export_by_clone!(PackedVector2Array);
+    impl_export_by_clone!(PackedVector3Array);
+    impl_export_by_clone!(Plane);
+    impl_export_by_clone!(Projection);
+    impl_export_by_clone!(Quaternion);
+    impl_export_by_clone!(Rect2);
+    impl_export_by_clone!(Rect2i);
+    impl_export_by_clone!(Rid);
+    impl_export_by_clone!(StringName);
+    impl_export_by_clone!(Transform2D);
+    impl_export_by_clone!(Transform3D);
+    impl_export_by_clone!(Vector2);
+    impl_export_by_clone!(Vector2i);
+    impl_export_by_clone!(Vector3);
+    impl_export_by_clone!(Vector3i);
+    impl_export_by_clone!(Vector4);
+
+    // TODO investigate whether these should impl Export at all, and if so, how
+    // impl_export_by_clone!(Callable);
+    // impl_export_by_clone!(Signal);
 }

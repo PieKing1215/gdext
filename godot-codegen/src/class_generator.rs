@@ -159,6 +159,7 @@ fn make_constructor(class: &Class, ctx: &Context) -> TokenStream {
 fn make_class(class: &Class, class_name: &TyName, ctx: &mut Context) -> GeneratedClass {
     // Strings
     let godot_class_str = &class_name.godot_ty;
+    let virtual_trait_str = class_name.virtual_trait_name();
 
     // Idents and tokens
     let base = match class.inherits.as_ref() {
@@ -174,6 +175,7 @@ fn make_class(class: &Class, class_name: &TyName, ctx: &mut Context) -> Generate
     let enums = make_enums(&class.enums, class_name, ctx);
     let inherits_macro = format_ident!("inherits_transitive_{}", class_name.rust_ty);
     let all_bases = ctx.inheritance_tree().collect_all_bases(class_name);
+    let virtual_trait = make_virtual_methods_trait(class, &all_bases, &virtual_trait_str, ctx);
 
     let memory = if class_name.rust_ty == "Object" {
         ident("DynamicRefCount")
@@ -199,6 +201,7 @@ fn make_class(class: &Class, class_name: &TyName, ctx: &mut Context) -> Generate
             pub struct #class_name {
                 object_ptr: sys::GDExtensionObjectPtr,
             }
+            #virtual_trait
             impl #class_name {
                 #constructor
                 #methods
@@ -323,12 +326,14 @@ fn make_module_file(classes_and_modules: Vec<GeneratedClassModule>) -> TokenStre
             is_pub,
             ..
         } = m;
+        let virtual_trait_name = ident(&class_name.virtual_trait_name());
 
         let vis = is_pub.then_some(quote! { pub });
 
         quote! {
             #vis mod #module_name;
             pub use #module_name::re_export::#class_name;
+            pub use #module_name::re_export::#virtual_trait_name;
         }
     });
 
@@ -463,12 +468,15 @@ fn is_type_excluded(ty: &str, ctx: &mut Context) -> bool {
     }
 }
 
-fn is_method_excluded(method: &ClassMethod, #[allow(unused_variables)] ctx: &mut Context) -> bool {
+fn is_method_excluded(
+    method: &ClassMethod,
+    is_virtual_impl: bool,
+    #[allow(unused_variables)] ctx: &mut Context,
+) -> bool {
     // Currently excluded:
     //
-    // * Private virtual methods designed for override; skip for now
-    //   E.g.: AudioEffectInstance::_process(const void*, AudioFrame*, int)
-    //   TODO decide what to do with them, overriding in a type-safe way?
+    // * Private virtual methods are only included in a virtual
+    //   implementation.
     //
     // * Methods accepting pointers are often supplementary
     //   E.g.: TextServer::font_set_data_ptr() -- in addition to TextServer::font_set_data().
@@ -490,11 +498,14 @@ fn is_method_excluded(method: &ClassMethod, #[allow(unused_variables)] ctx: &mut
     }
     // -- end.
 
-    method.name.starts_with('_')
-        || method
-            .return_value
-            .as_ref()
-            .map_or(false, |ret| ret.type_.contains('*'))
+    if method.name.starts_with('_') && !is_virtual_impl {
+        return true;
+    }
+
+    method
+        .return_value
+        .as_ref()
+        .map_or(false, |ret| ret.type_.contains('*'))
         || method
             .arguments
             .as_ref()
@@ -523,7 +534,8 @@ fn make_method_definition(
     class_name: &TyName,
     ctx: &mut Context,
 ) -> TokenStream {
-    if is_method_excluded(method, ctx) || special_cases::is_deleted(class_name, &method.name) {
+    if is_method_excluded(method, false, ctx) || special_cases::is_deleted(class_name, &method.name)
+    {
         return TokenStream::new();
     }
     /*if method.map_args(|args| args.is_empty()) {
@@ -572,6 +584,7 @@ fn make_method_definition(
         __call_fn(__method_bind, #receiver_arg, __args_ptr, return_ptr);
     };
 
+    let is_virtual = false;
     make_function_definition(
         method_name_str,
         special_cases::is_private(class_name, &method.name),
@@ -582,6 +595,7 @@ fn make_method_definition(
         init_code,
         &varcall_invocation,
         &ptrcall_invocation,
+        is_virtual,
         ctx,
     )
 }
@@ -622,6 +636,7 @@ fn make_builtin_method_definition(
         __call_fn(#receiver_arg, __args_ptr, return_ptr, __args.len() as i32);
     };
 
+    let is_virtual = false;
     make_function_definition(
         method_name_str,
         special_cases::is_private(class_name, &method.name),
@@ -632,6 +647,7 @@ fn make_builtin_method_definition(
         init_code,
         &ptrcall_invocation,
         &ptrcall_invocation,
+        is_virtual,
         ctx,
     )
 }
@@ -657,8 +673,9 @@ pub(crate) fn make_utility_function_definition(
         __call_fn(return_ptr, __args_ptr, __args.len() as i32);
     };
 
+    let is_virtual = false;
     make_function_definition(
-        &function.name,
+        function_name_str,
         false,
         TokenStream::new(),
         &function.arguments,
@@ -667,6 +684,7 @@ pub(crate) fn make_utility_function_definition(
         init_code,
         &invocation,
         &invocation,
+        is_virtual,
         ctx,
     )
 }
@@ -702,6 +720,7 @@ fn make_function_definition(
     init_code: TokenStream,
     varcall_invocation: &TokenStream,
     ptrcall_invocation: &TokenStream,
+    is_virtual: bool,
     ctx: &mut Context,
 ) -> TokenStream {
     let vis = if is_private {
@@ -749,10 +768,17 @@ fn make_function_definition(
         ptrcall_invocation,
         prepare_arg_types,
         error_fn_context,
+        is_virtual,
         ctx,
     );
 
-    if let Some(variant_ffi) = variant_ffi.as_ref() {
+    if is_virtual {
+        quote! {
+            fn #fn_name( #receiver #( #params, )* ) #return_decl {
+                #call_code
+            }
+        }
+    } else if let Some(variant_ffi) = variant_ffi.as_ref() {
         // varcall (using varargs)
         let sys_method = &variant_ffi.sys_method;
         quote! {
@@ -799,13 +825,7 @@ fn make_receiver(
     is_const: bool,
     receiver_arg: TokenStream,
 ) -> (TokenStream, TokenStream) {
-    let receiver = if is_static {
-        quote! {}
-    } else if is_const {
-        quote! { &self, }
-    } else {
-        quote! { &mut self, }
-    };
+    let receiver = make_receiver_self_param(is_static, is_const);
 
     let receiver_arg = if is_static {
         quote! { std::ptr::null_mut() }
@@ -814,6 +834,16 @@ fn make_receiver(
     };
 
     (receiver, receiver_arg)
+}
+
+fn make_receiver_self_param(is_static: bool, is_const: bool) -> TokenStream {
+    if is_static {
+        quote! {}
+    } else if is_const {
+        quote! { &self, }
+    } else {
+        quote! { &mut self, }
+    }
 }
 
 fn make_params(
@@ -848,6 +878,7 @@ fn make_params(
     [params, variant_types, arg_exprs, arg_names]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_return(
     return_value: Option<&MethodReturn>,
     variant_ffi: Option<&VariantFfi>,
@@ -855,6 +886,7 @@ fn make_return(
     ptrcall_invocation: &TokenStream,
     prepare_arg_types: TokenStream,
     error_fn_context: TokenStream, // only for panic message
+    is_virtual: bool,
     ctx: &mut Context,
 ) -> (TokenStream, TokenStream) {
     let return_decl: TokenStream;
@@ -869,8 +901,13 @@ fn make_return(
         return_ty = None;
     }
 
-    let call = match (variant_ffi, return_ty) {
-        (Some(variant_ffi), Some(return_ty)) => {
+    let call = match (is_virtual, variant_ffi, return_ty) {
+        (true, _, _) => {
+            quote! {
+                unimplemented!()
+            }
+        }
+        (false, Some(variant_ffi), Some(return_ty)) => {
             // If the return type is not Variant, then convert to concrete target type
             let return_expr = match return_ty {
                 RustTy::BuiltinIdent(ident) if ident == "Variant" => quote! { variant },
@@ -892,7 +929,7 @@ fn make_return(
                 #return_expr
             }
         }
-        (Some(_), None) => {
+        (false, Some(_), None) => {
             // Note: __err may remain unused if the #call does not handle errors (e.g. utility fn, ptrcall, ...)
             // TODO use Result instead of panic on error
             quote! {
@@ -905,7 +942,7 @@ fn make_return(
                 }
             }
         }
-        (None, Some(RustTy::EngineClass { tokens, .. })) => {
+        (false, None, Some(RustTy::EngineClass { tokens, .. })) => {
             let return_ty = tokens;
             quote! {
                 <#return_ty>::from_sys_init_opt(|return_ptr| {
@@ -913,14 +950,14 @@ fn make_return(
                 })
             }
         }
-        (None, Some(return_ty)) => {
+        (false, None, Some(return_ty)) => {
             quote! {
                 <#return_ty as sys::GodotFfi>::from_sys_init_default(|return_ptr| {
                     #ptrcall_invocation
                 })
             }
         }
-        (None, None) => {
+        (false, None, None) => {
             quote! {
                 let return_ptr = std::ptr::null_mut();
                 #ptrcall_invocation
@@ -929,4 +966,130 @@ fn make_return(
     };
 
     (return_decl, call)
+}
+
+fn make_virtual_methods_trait(
+    class: &Class,
+    all_bases: &[TyName],
+    trait_name: &str,
+    ctx: &mut Context,
+) -> TokenStream {
+    let trait_name = ident(trait_name);
+
+    let virtual_method_fns = make_all_virtual_methods(class, all_bases, ctx);
+    let special_virtual_methods = special_virtual_methods();
+
+    quote! {
+        #[allow(unused_variables)]
+        #[allow(clippy::unimplemented)]
+        pub trait #trait_name: crate::private::You_forgot_the_attribute__godot_api + crate::obj::GodotClass {
+            #( #virtual_method_fns )*
+            #special_virtual_methods
+        }
+    }
+}
+
+fn special_virtual_methods() -> TokenStream {
+    quote! {
+        fn register_class(builder: &mut crate::builder::ClassBuilder<Self>) {
+            unimplemented!()
+        }
+        fn init(base: crate::obj::Base<Self::Base>) -> Self {
+            unimplemented!()
+        }
+        fn to_string(&self) -> crate::builtin::GodotString {
+            unimplemented!()
+        }
+    }
+}
+
+fn make_virtual_method(class_method: &ClassMethod, ctx: &mut Context) -> TokenStream {
+    let method_name = virtual_method_name(class_method);
+
+    // Virtual methods are never static.
+    assert!(!class_method.is_static);
+
+    let receiver = make_receiver_self_param(false, class_method.is_const);
+
+    // make_return requests these token streams, but they won't be used for
+    // virtual methods. We can provide empty streams.
+    let varcall_invocation = TokenStream::new();
+    let ptrcall_invocation = TokenStream::new();
+    let init_code = TokenStream::new();
+    let variant_ffi = None;
+
+    let is_virtual = true;
+    let is_private = false;
+    make_function_definition(
+        method_name,
+        is_private,
+        receiver,
+        &class_method.arguments,
+        class_method.return_value.as_ref(),
+        variant_ffi,
+        init_code,
+        &varcall_invocation,
+        &ptrcall_invocation,
+        is_virtual,
+        ctx,
+    )
+}
+
+fn make_all_virtual_methods(
+    class: &Class,
+    all_bases: &[TyName],
+    ctx: &mut Context,
+) -> Vec<TokenStream> {
+    let mut all_virtuals = vec![];
+    let mut extend_virtuals = |class| {
+        all_virtuals.extend(
+            get_methods_in_class(class)
+                .iter()
+                .cloned()
+                .filter(|m| m.is_virtual),
+        );
+    };
+
+    // Get virtuals defined on the current class.
+    extend_virtuals(class);
+    // Add virtuals from superclasses.
+    for base in all_bases {
+        let superclass = ctx.get_engine_class(base);
+        extend_virtuals(superclass);
+    }
+    all_virtuals
+        .into_iter()
+        .filter_map(|method| {
+            if is_method_excluded(&method, true, ctx) {
+                None
+            } else {
+                Some(make_virtual_method(&method, ctx))
+            }
+        })
+        .collect()
+}
+
+fn get_methods_in_class(class: &Class) -> &[ClassMethod] {
+    match &class.methods {
+        None => &[],
+        Some(methods) => methods,
+    }
+}
+
+fn virtual_method_name(class_method: &ClassMethod) -> &str {
+    // Matching the C++ convention, we remove the leading underscore
+    // from virtual method names.
+    let method_name = class_method
+        .name
+        .strip_prefix('_')
+        .unwrap_or(&class_method.name);
+
+    // As a special exception, a few classes define a virtual method
+    // called "_init" (distinct from the constructor), so we rename
+    // those to avoid a name conflict in our trait.
+    if method_name == "init" {
+        "init_ext"
+    } else {
+        method_name
+    }
 }

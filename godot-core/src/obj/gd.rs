@@ -18,7 +18,7 @@ use crate::builtin::meta::{ClassName, VariantMetadata};
 use crate::builtin::{FromVariant, ToVariant, Variant, VariantConversionError};
 use crate::obj::dom::Domain as _;
 use crate::obj::mem::Memory as _;
-use crate::obj::{cap, dom, mem, GodotClass, Inherits, Share};
+use crate::obj::{cap, dom, mem, Export, GodotClass, Inherits, Share};
 use crate::obj::{GdMut, GdRef, InstanceId};
 use crate::storage::InstanceStorage;
 use crate::{callbacks, engine, out};
@@ -162,7 +162,7 @@ where
         let callbacks = crate::storage::nop_instance_callbacks();
 
         unsafe {
-            let token = sys::get_library();
+            let token = sys::get_library() as *mut std::ffi::c_void;
             let binding =
                 interface_fn!(object_get_instance_binding)(self.obj_sys(), token, &callbacks);
 
@@ -171,7 +171,7 @@ where
                 "Class {} -- null instance; does the class have a Godot creator function?",
                 std::any::type_name::<T>()
             );
-            crate::private::as_storage::<T>(binding)
+            crate::private::as_storage::<T>(binding as sys::GDExtensionClassInstancePtr)
         }
     }
 }
@@ -585,6 +585,12 @@ impl<T: GodotClass> Share for Gd<T> {
     fn share(&self) -> Self {
         out!("Gd::share");
         Self::from_opaque(self.opaque).with_inc_refcount()
+    }
+}
+
+impl<T: GodotClass> Export for Gd<T> {
+    fn export(&self) -> Self {
+        self.share()
     }
 }
 

@@ -4,6 +4,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+use crate::builder::ClassBuilder;
+use crate::builtin::GodotString;
 use crate::obj::Base;
 
 use godot_ffi as sys;
@@ -11,6 +13,8 @@ use godot_ffi as sys;
 /// Makes `T` eligible to be managed by Godot and stored in [`Gd<T>`][crate::obj::Gd] pointers.
 ///
 /// The behavior of types implementing this trait is influenced by the associated types; check their documentation for information.
+///
+/// You wouldn't usually implement this trait yourself; use the [`GodotClass`](godot_macros::GodotClass) derive macro instead.
 pub trait GodotClass: 'static
 where
     Self: Sized,
@@ -46,6 +50,14 @@ pub trait Share {
     ///
     /// If the referred-to object is reference-counted, this will increment the count.
     fn share(&self) -> Self;
+}
+
+/// Trait implemented for types that can be used as `#[export]` fields. This creates a copy of the
+/// value, for some type-specific definition of "copy". For example, `Array` and `Gd` are returned
+/// via `Share::share()` instead of copying the actual data.
+pub trait Export {
+    /// Creates a copy to be returned from a getter.
+    fn export(&self) -> Self;
 }
 
 /// Non-strict inheritance relationship in the Godot class hierarchy.
@@ -137,6 +149,20 @@ pub mod cap {
         fn __godot_init(base: Base<Self::Base>) -> Self;
     }
 
+    // TODO Evaluate whether we want this public or not
+    #[doc(hidden)]
+    pub trait GodotToString: GodotClass {
+        #[doc(hidden)]
+        fn __godot_to_string(&self) -> GodotString;
+    }
+
+    // TODO Evaluate whether we want this public or not
+    #[doc(hidden)]
+    pub trait GodotRegisterClass: GodotClass {
+        #[doc(hidden)]
+        fn __godot_register_class(builder: &mut ClassBuilder<Self>);
+    }
+
     /// Auto-implemented for `#[godot_api] impl MyClass` blocks
     pub trait ImplementsGodotApi: GodotClass {
         #[doc(hidden)]
@@ -148,8 +174,8 @@ pub mod cap {
         fn __register_exports();
     }
 
-    /// Auto-implemented for `#[godot_api] impl GodotExt for MyClass` blocks
-    pub trait ImplementsGodotExt: GodotClass {
+    /// Auto-implemented for `#[godot_api] impl ***Virtual for MyClass` blocks
+    pub trait ImplementsGodotVirtual: GodotClass {
         #[doc(hidden)]
         fn __virtual_call(_name: &str) -> sys::GDExtensionClassCallVirtual;
     }
